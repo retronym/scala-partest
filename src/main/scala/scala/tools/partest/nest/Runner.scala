@@ -153,12 +153,33 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   )
   def nextTestActionFailing(reason: String): Boolean = nextTestActionExpectTrue(reason, false)
 
+  val testFullPath = testFile.getAbsolutePath
+
+  private def assembleTestProperties(outDir: File, logFile: File): Map[String, String] = {
+    val extras =
+      if (nestUI.debug) Map("partest.debug" -> "true")
+      else Map()
+    Map(
+      "file.encoding" -> "UTF-8",
+      "java.library.path" -> logFile.getParentFile.getAbsolutePath,
+      "partest.output" -> outDir.getAbsolutePath,
+      "partest.lib" -> libraryUnderTest.getAbsolutePath,
+      "partest.reflect" -> reflectUnderTest.getAbsolutePath,
+      "partest.comp" -> compilerUnderTest.getAbsolutePath,
+      "partest.cwd" -> outDir.getParent,
+      "partest.test-path" -> testFullPath,
+      "partest.testname" -> fileBase,
+      "javacmd" -> javaCmdPath,
+      "javaccmd" -> javacCmdPath,
+      "user.language" -> "en",
+      "user.country" -> "US"
+    ) ++ extras
+  }
+
   private def assembleTestCommand(outDir: File, logFile: File): List[String] = {
     val argString = file2String(argsFile)
     if (argString != "")
       nestUI.verbose("Found javaopts file '%s', using options: '%s'".format(argsFile, argString))
-
-    val testFullPath = testFile.getAbsolutePath
 
     // Note! As this currently functions, suiteRunner.javaOpts must precede argString
     // because when an option is repeated to java only the last one wins.
@@ -168,22 +189,6 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     //
     // debug: Found javaopts file 'files/shootout/message.scala-2.javaopts', using options: '-Xss32k'
     // debug: java -Xss32k -Xss2m -Xms256M -Xmx1024M -classpath [...]
-    val extras = if (nestUI.debug) List("-Dpartest.debug=true") else Nil
-    val propertyOptions = List(
-      "-Dfile.encoding=UTF-8",
-      "-Djava.library.path="+logFile.getParentFile.getAbsolutePath,
-      "-Dpartest.output="+outDir.getAbsolutePath,
-      "-Dpartest.lib="+libraryUnderTest.getAbsolutePath,
-      "-Dpartest.reflect="+reflectUnderTest.getAbsolutePath,
-      "-Dpartest.comp="+compilerUnderTest.getAbsolutePath,
-      "-Dpartest.cwd="+outDir.getParent,
-      "-Dpartest.test-path="+testFullPath,
-      "-Dpartest.testname="+fileBase,
-      "-Djavacmd="+javaCmdPath,
-      "-Djavaccmd="+javacCmdPath,
-      "-Duser.language=en",
-      "-Duser.country=US"
-    ) ++ extras
 
     val classpath = joinPaths(extraClasspath ++ testClassPath)
 
@@ -191,11 +196,12 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
       (suiteRunner.javaOpts.split(' ') ++ extraJavaOptions ++ argString.split(' ')).map(_.trim).filter(_ != "").toList ++ Seq(
         "-classpath",
         join(outDir.toString, classpath)
-      ) ++ propertyOptions ++ Seq(
+      ) ++ assembleTestProperties(outDir, logFile).map{case (prop, value) => s"-D$prop=$value"}
+        ++ Seq(
         "scala.tools.nsc.MainGenericRunner",
         "-usejavacp",
         "Test",
-        "jvm"
+        "jvm"  // what is this doing here? Scala.NET remnant?
       )
     )
   }
@@ -225,6 +231,8 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     (pl buffer run) == 0
   }
 
+  // a running test needs exclusive access to stdout/stderr and exclusive
+  // access to customized system properties
   private val execInProcessLock = new AnyRef
 
   private def execTestInProcess(outDir: File, logFile: File): Boolean = {
@@ -237,6 +245,8 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     def invoke = Output.withRedirected(logWriter) {
       Console.withOut(logWriter) {
         Console.withErr(logWriter) {
+          for ((property, value) <- assembleTestProperties(outDir, logFile))
+            System.setProperty(property, value)
           main.invoke(null, Array("jvm"))
         }
       }
