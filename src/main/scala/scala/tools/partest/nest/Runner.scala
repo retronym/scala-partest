@@ -84,8 +84,6 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   val argsFile   = testFile changeExtension "javaopts"
   val testIdent  = testFile.testIdent // e.g. pos/t1234
 
-  val argString = file2String(argsFile)
-
   lazy val outDir = { outFile.mkdirs() ; outFile }
 
   // oh boy...
@@ -156,6 +154,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   def nextTestActionFailing(reason: String): Boolean = nextTestActionExpectTrue(reason, false)
 
   private def assembleTestCommand(outDir: File, logFile: File): List[String] = {
+    val argString = file2String(argsFile)
     if (argString != "")
       nestUI.verbose("Found javaopts file '%s', using options: '%s'".format(argsFile, argString))
 
@@ -260,10 +259,10 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   }
 
   private def execTest(outDir: File, logFile: File): Boolean =
-    if (argString == "")
-      execTestInProcess(outDir, logFile)
-    else
+    if (argsFile.exists())
       execTestForked(outDir, logFile)
+    else
+      execTestInProcess(outDir, logFile)
 
   override def toString = s"""Test($testIdent, lastState = $lastState)"""
 
