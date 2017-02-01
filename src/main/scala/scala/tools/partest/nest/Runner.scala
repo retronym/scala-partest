@@ -81,7 +81,10 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   val outFile    = logFile changeExtension "obj"
   val checkFile  = testFile changeExtension "check"
   val flagsFile  = testFile changeExtension "flags"
+  val argsFile   = testFile changeExtension "javaopts"
   val testIdent  = testFile.testIdent // e.g. pos/t1234
+
+  val argString = file2String(argsFile)
 
   lazy val outDir = { outFile.mkdirs() ; outFile }
 
@@ -153,9 +156,6 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   def nextTestActionFailing(reason: String): Boolean = nextTestActionExpectTrue(reason, false)
 
   private def assembleTestCommand(outDir: File, logFile: File): List[String] = {
-    // check whether there is a ".javaopts" file
-    val argsFile  = testFile changeExtension "javaopts"
-    val argString = file2String(argsFile)
     if (argString != "")
       nestUI.verbose("Found javaopts file '%s', using options: '%s'".format(argsFile, argString))
 
@@ -226,7 +226,29 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     (pl buffer run) == 0
   }
 
-  private def execTest(outDir: File, logFile: File): Boolean = {
+  private val execInProcessLock = new AnyRef
+
+  private def execTestInProcess(outDir: File, logFile: File): Boolean = {
+    val logWriter = new PrintStream(new FileOutputStream(logFile, true), true)
+
+    val loader = ScalaClassLoader.fromURLs(List(outDir.toURI.toURL), this.getClass.getClassLoader)
+    val clazz = Class.forName("Test", true, loader)
+    val main = clazz.getDeclaredMethod("main", classOf[Array[String]])
+
+    def invoke = Output.withRedirected(logWriter) {
+      Console.withOut(logWriter) {
+        Console.withErr(logWriter) {
+          main.invoke(null, Array("jvm"))
+        }
+      }
+    }
+    nextTestAction {
+      execInProcessLock.synchronized(invoke)
+      true
+    } { case _: Any => genPass() }
+  }
+
+  private def execTestForked(outDir: File, logFile: File): Boolean = {
     val cmd = assembleTestCommand(outDir, logFile)
 
     pushTranscript((cmd mkString s" \\$EOL  ") + " > " + logFile.getName)
@@ -236,6 +258,12 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
         genFail("non-zero exit code")
     }
   }
+
+  private def execTest(outDir: File, logFile: File): Boolean =
+    if (argString == "")
+      execTestInProcess(outDir, logFile)
+    else
+      execTestForked(outDir, logFile)
 
   override def toString = s"""Test($testIdent, lastState = $lastState)"""
 
