@@ -247,13 +247,19 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
         Console.withErr(logWriter) {
           for ((property, value) <- assembleTestProperties(outDir, logFile))
             System.setProperty(property, value)
-          main.invoke(null, Array("jvm"))
+          try {
+            main.invoke(null, Array("jvm"))
+            true
+          } catch {
+            case t: Throwable =>
+              t.printStackTrace(logWriter)
+              false
+          }
         }
       }
     }
     nextTestAction {
       execInProcessLock.synchronized(invoke)
-      true
     } { case _: Any => genPass() }
   }
 
