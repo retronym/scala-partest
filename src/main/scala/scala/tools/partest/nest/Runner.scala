@@ -5,26 +5,27 @@
 package scala.tools.partest
 package nest
 
-import java.io.{ Console => _, _ }
+import java.io.{Console => _, _}
 import java.net.URL
-import java.nio.charset.{ Charset, CharsetDecoder, CharsetEncoder, CharacterCodingException, CodingErrorAction => Action }
+import java.nio.charset.{CharacterCodingException, Charset, CharsetDecoder, CharsetEncoder, CodingErrorAction => Action}
+import java.security.Permission
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit.NANOSECONDS
+
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.Duration
 import scala.io.Codec
 import scala.reflect.internal.FatalError
 import scala.reflect.internal.util.ScalaClassLoader
-import scala.sys.process.{ Process, ProcessLogger }
-import scala.tools.nsc.Properties.{ envOrNone, isWin, jdkHome, javaHome, propOrEmpty, setProp, versionMsg, javaVmName, javaVmVersion, javaVmInfo }
-import scala.tools.nsc.{ Settings, CompilerCommand, Global }
+import scala.sys.process.{Process, ProcessLogger}
+import scala.tools.nsc.Properties.{envOrNone, isWin, javaHome, javaVmInfo, javaVmName, javaVmVersion, jdkHome, propOrEmpty, setProp, versionMsg}
+import scala.tools.nsc.{CompilerCommand, Global, Settings}
 import scala.tools.nsc.reporters.ConsoleReporter
-import scala.tools.nsc.util.{ Exceptional, stackTraceString }
-import scala.util.{ Try, Success, Failure }
-import ClassPath.{ join, split }
-import TestState.{ Pass, Fail, Crash, Uninitialized, Updated }
-
-import FileManager.{ compareFiles, compareContents, joinPaths, withTempFile }
+import scala.tools.nsc.util.{Exceptional, stackTraceString}
+import scala.util.{Failure, Success, Try}
+import ClassPath.{join, split}
+import TestState.{Crash, Fail, Pass, Uninitialized, Updated}
+import FileManager.{compareContents, compareFiles, joinPaths, withTempFile}
 
 trait TestInfo {
   /** pos/t1234 */
@@ -248,7 +249,8 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
           for ((property, value) <- assembleTestProperties(outDir, logFile))
             System.setProperty(property, value)
           try {
-            main.invoke(null, Array("jvm"))
+            def invoke = main.invoke(null, Array("jvm"))
+            withTrapSysExit(invoke).isDefined
             true
           } catch {
             case t: Throwable =>
@@ -261,6 +263,29 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     nextTestAction {
       execInProcessLock.synchronized(invoke)
     } { case _: Any => genPass() }
+  }
+
+  private def withTrapSysExit[T](t: => T): Option[T] = {
+    val saved = System.getSecurityManager
+    val manager = new TrapExitSecurityManager
+    System.setSecurityManager(manager)
+    try {
+      val result = t
+      manager.exitCode match {
+        case None => Some(result)
+        case Some(code) => None // TODO log exit code?
+      }
+    } finally {
+      System.setSecurityManager(saved)
+    }
+  }
+  private class TrapExitSecurityManager extends SecurityManager {
+    var exitCode: Option[Int] = None
+    override def checkExit(status: Int): Unit = exitCode = Some(status)
+
+    override def checkPermission(perm: Permission): Unit = {}
+
+    override def checkPermission(perm: Permission, context: Any): Unit = {}
   }
 
   private def execTestForked(outDir: File, logFile: File): Boolean = {
