@@ -15,7 +15,12 @@ object PartestDefaults {
 
   def testBuild   = prop("partest.build")
   def errorCount  = prop("partest.errors")  map (_.toInt) getOrElse 0
-  def numThreads  = prop("partest.threads") map (_.toInt) getOrElse runtime.availableProcessors
+  def numThreads  = math.max(1, prop("partest.threads") map (_.toInt) getOrElse runtime.availableProcessors)
+  def execInProcess = {
+    val prop = java.lang.Boolean.getBoolean("partest.exec.in.process")
+    if (prop && numThreads > 1) throw new IllegalArgumentException("-Dpartest.exec.in.process may only be used with -Dpartest.threads=1")
+    prop
+  }
   def waitTime    = Duration(prop("partest.timeout") getOrElse "4 hours")
 
   //def timeout     = "1200000"   // per-test timeout
