@@ -22,6 +22,7 @@ object PartestDefaults {
     prop
   }
   def waitTime    = Duration(prop("partest.timeout") getOrElse "4 hours")
+  def reuseGlobal = java.lang.Boolean.getBoolean("partest.global.reuse")
 
   //def timeout     = "1200000"   // per-test timeout
 

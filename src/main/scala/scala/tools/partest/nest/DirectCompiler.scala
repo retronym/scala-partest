@@ -7,10 +7,12 @@ package scala.tools.partest
 package nest
 
 import scala.collection.mutable.ListBuffer
-import scala.tools.nsc.{ Global, Settings, CompilerCommand }
-import scala.tools.nsc.reporters.{ Reporter, ConsoleReporter }
-import scala.reflect.io.AbstractFile
-import java.io.{ PrintWriter, FileWriter }
+import scala.tools.nsc.{CompilerCommand, Global, Settings}
+import scala.tools.nsc.reporters.{ConsoleReporter, Reporter}
+import scala.reflect.io.{AbstractFile, NoAbstractFile}
+import java.io.{FileWriter, PrintWriter}
+
+import scala.util.control.ControlThrowable
 
 class ExtConsoleReporter(settings: Settings, val writer: PrintWriter) extends ConsoleReporter(settings, Console.in, writer) {
   shortname = true
@@ -30,12 +32,105 @@ class PartestGlobal(settings: Settings, reporter: Reporter) extends Global(setti
   // override def globalError(msg: String): Unit
   // override def supplementErrorMessage(msg: String): String
 }
+object DirectCompiler {
+  private val globalCache = new java.lang.ThreadLocal[PartestGlobal]()
+
+}
 class DirectCompiler(val runner: Runner) {
-  def newGlobal(settings: Settings, reporter: Reporter): PartestGlobal =
-    new PartestGlobal(settings, reporter)
+  def newGlobal(settings: Settings, reporter: Reporter): PartestGlobal = {
+    def create(): PartestGlobal = {
+      val g = new PartestGlobal(settings, reporter)
+      DirectCompiler.globalCache.set(g)
+      g
+    }
+    if (!PartestDefaults.reuseGlobal) create()
+    else DirectCompiler.globalCache.get() match {
+      case null => create()
+      case cached =>
+        // experimental mode of partest to reuse the symbol table for subsequent compilations
+        cached.settings.outputDirs.setSingleOutput(settings.outputDirs.getSingleOutput.get)
+        cached.settings.classpath.value = settings.classpath.value
+        val plat = cached.platform
+        val canMutateSettings = cached.settings.toString() == settings.toString
+        if (canMutateSettings) {
+          cached.currentSettings = settings
+          plat.getClass.getMethod("currentClassPath_$eq", classOf[Option[_]]).invoke(plat, None)
+          cached.reporter = reporter
+          try {
+            resetSymbolTable(cached)
+            cached
+          } catch {
+            case _: DiscardGlobal =>
+              create()
+          }
+        } else {
+          create()
+        }
+
+    }
+  }
 
   def newGlobal(settings: Settings, logWriter: FileWriter): Global =
     newGlobal(settings, new ExtConsoleReporter(settings, new PrintWriter(logWriter)))
+
+  private class DiscardGlobal extends ControlThrowable
+  private def resetSymbolTable(g: Global): Unit = {
+    import g._
+    def walkTopLevels(root: Symbol): Unit = {
+      def safeInfo(sym: Symbol): Type =
+        if (sym.hasRawInfo && sym.rawInfo.isComplete) sym.info else NoType
+      def packageClassOrSelf(sym: Symbol): Symbol =
+        if (sym.hasPackageFlag && !sym.isModuleClass) sym.moduleClass else sym
+
+      val reset = collection.mutable.Set[Symbol]()
+      for (x <- safeInfo(packageClassOrSelf(root)).decls) {
+        if (x == root) ()
+        else if (x.hasPackageFlag && x != rootMirror.EmptyPackage) {
+          x.moduleClass.rawInfo match {
+            case l: loaders.PackageLoader =>
+              x.moduleClass.setInfo(new loaders.PackageLoader(x.fullNameString, g.classPath))
+              x.setInfo(x.moduleClass.tpe)
+            case _ =>
+              walkTopLevels(x)
+          }
+        } else if (x.owner != root) { // exclude package class members
+          var sym = x.enclosingTopLevelClass
+          if (x.isModule) sym = x.moduleClass
+          if (sym.isModuleClass) sym = sym.companionClass.orElse(sym)
+          if (sym.hasRawInfo) {
+            val assocFile = if (sym.rawInfo.isComplete)
+              sym.associatedFile
+            else sym.rawInfo match {
+              case l: loaders.ClassfileLoader =>
+                l.classfile
+              case _ =>
+                NoAbstractFile
+            }
+            if (assocFile != NoAbstractFile) {
+              val fromJar = assocFile.path.endsWith(".class") && assocFile.underlyingSource.isDefined
+              if (!fromJar) {
+                if (sym.hasTransOwner(definitions.ScalaPackageClass)) throw new DiscardGlobal
+                sym.owner.ownerChain.takeWhile(!_.isEffectiveRoot).foreach { owner =>
+                  if (!reset.contains(owner)) {
+                    //                  println("reset: " + owner)
+                    owner.setInfo(new loaders.PackageLoader(owner.fullNameString, classPath))
+                    owner.sourceModule.setInfo(owner.tpe)
+                    reset += owner
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    exitingTyper {
+      import rootMirror._
+      EmptyPackageClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
+      EmptyPackage setInfo EmptyPackageClass.tpe
+      walkTopLevels(RootClass)
+    }
+  }
 
 
   /** Massage args to merge plugins and fix paths.
