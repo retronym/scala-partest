@@ -12,6 +12,7 @@ import scala.tools.nsc.reporters.{ConsoleReporter, Reporter}
 import scala.reflect.io.{AbstractFile, NoAbstractFile}
 import java.io.{FileWriter, PrintWriter}
 
+import scala.tools.nsc.util.ClassPath
 import scala.util.control.ControlThrowable
 
 class ExtConsoleReporter(settings: Settings, val writer: PrintWriter) extends ConsoleReporter(settings, Console.in, writer) {
@@ -43,12 +44,15 @@ class DirectCompiler(val runner: Runner) {
       DirectCompiler.globalCache.set(g)
       g
     }
-    if (!PartestDefaults.reuseGlobal) create()
+    val newOutputDir = settings.outputDirs.getSingleOutput.get
+    // TODO patch RootClass info to be able to reuse globals in this use case.
+    val classFilesFromPreviousCompileRoundsExists = settings.outputDirs.getSingleOutput.get.file.list().length > 0
+    if (!PartestDefaults.reuseGlobal || classFilesFromPreviousCompileRoundsExists) create()
     else DirectCompiler.globalCache.get() match {
       case null => create()
       case cached =>
         // experimental mode of partest to reuse the symbol table for subsequent compilations
-        cached.settings.outputDirs.setSingleOutput(settings.outputDirs.getSingleOutput.get)
+        cached.settings.outputDirs.setSingleOutput(newOutputDir)
         cached.settings.classpath.value = settings.classpath.value
         val plat = cached.platform
         val canMutateSettings = cached.settings.toString() == settings.toString
@@ -57,7 +61,7 @@ class DirectCompiler(val runner: Runner) {
           plat.getClass.getMethod("currentClassPath_$eq", classOf[Option[_]]).invoke(plat, None)
           cached.reporter = reporter
           try {
-            resetSymbolTable(cached)
+            resetSymbolTable(cached, newOutputDir.file)
             cached
           } catch {
             case _: DiscardGlobal =>
@@ -74,7 +78,7 @@ class DirectCompiler(val runner: Runner) {
     newGlobal(settings, new ExtConsoleReporter(settings, new PrintWriter(logWriter)))
 
   private class DiscardGlobal extends ControlThrowable
-  private def resetSymbolTable(g: Global): Unit = {
+  private def resetSymbolTable(g: Global, outputDir: File): Unit = {
     import g._
     def walkTopLevels(root: Symbol): Unit = {
       def safeInfo(sym: Symbol): Type =
@@ -129,6 +133,7 @@ class DirectCompiler(val runner: Runner) {
       EmptyPackageClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
       EmptyPackage setInfo EmptyPackageClass.tpe
       walkTopLevels(RootClass)
+      // TODO update RootClass info to patch in packages from the current test's classpath
     }
   }
 
@@ -182,11 +187,11 @@ class DirectCompiler(val runner: Runner) {
     val srcDir       = if (testFile.isDirectory) testFile else Path(testFile).parent.jfile
     val opts         = updatePluginPath(opts0, AbstractFile getDirectory outDir, AbstractFile getDirectory srcDir)
     val command      = new CompilerCommand(opts.toList, testSettings)
+    testSettings.outputDirs setSingleOutput outDir.getPath
     val global       = newGlobal(testSettings, logWriter)
     val reporter     = global.reporter.asInstanceOf[ExtConsoleReporter]
     def errorCount   = reporter.errorCount
 
-    testSettings.outputDirs setSingleOutput outDir.getPath
 
     def reportError(s: String): Unit = reporter.error(null, s)
 
