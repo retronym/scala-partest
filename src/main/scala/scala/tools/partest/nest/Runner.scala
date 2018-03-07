@@ -811,6 +811,8 @@ class SuiteRunner(
   // TODO: make this immutable
   PathSettings.testSourcePath = testSourcePath
 
+  val durations = collection.concurrent.TrieMap[File, Long]()
+
   def banner = {
     val baseDir = fileManager.compilerUnderTest.parent.toString
     def relativize(path: String) = path.replace(baseDir, s"$$baseDir").replace(PathSettings.srcDir.toString, "$sourceDir")
@@ -832,7 +834,10 @@ class SuiteRunner(
     // |Java Classpath:             ${sys.props("java.class.path")}
   }
 
-  def onFinishTest(testFile: File, result: TestState, durationMs: Long): TestState = result
+  def onFinishTest(testFile: File, result: TestState, durationMs: Long): TestState = {
+    durations(testFile) = durationMs
+    result
+  }
 
   def runTest(testFile: File): TestState = {
     val start = System.nanoTime()
@@ -844,12 +849,12 @@ class SuiteRunner(
       if (failed && !runner.logFile.canRead)
         runner.genPass()
       else {
-        val (state, _) =
+        val (state, durationMs) =
           try timed(runner.run())
           catch {
             case t: Throwable => throw new RuntimeException(s"Error running $testFile", t)
           }
-        nestUI.reportTest(state, runner)
+        nestUI.reportTest(state, runner, durationMs)
         runner.cleanup()
         state
       }
