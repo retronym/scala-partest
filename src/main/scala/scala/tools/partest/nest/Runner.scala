@@ -294,7 +294,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
         //        error.setStackTrace(throwable.getStackTrace)
         setLastState(genFail("non-zero exit code"))
         false
-      case Right(succeeded) =>
+      case _ =>
         setLastState(genPass())
         true
     }
