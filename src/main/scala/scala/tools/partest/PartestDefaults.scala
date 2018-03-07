@@ -16,9 +16,9 @@ object PartestDefaults {
   def testBuild   = prop("partest.build")
   def errorCount  = prop("partest.errors")  map (_.toInt) getOrElse 0
   def numThreads  = math.max(1, prop("partest.threads") map (_.toInt) getOrElse runtime.availableProcessors)
-  def execInProcess = {
+  def execInProcess: Boolean = {
     val prop = java.lang.Boolean.getBoolean("partest.exec.in.process")
-    if (prop && numThreads > 1) throw new IllegalArgumentException("-Dpartest.exec.in.process may only be used with -Dpartest.threads=1")
+    if (prop && numThreads > 1) println("Note: test execution will be non-parallel under -Dpartest.exec.in.process")
     prop
   }
   def waitTime    = Duration(prop("partest.timeout") getOrElse "4 hours")

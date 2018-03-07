@@ -255,7 +255,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     }
   }
 
-  def execTestInProcess(classesDir: File, log: File): Boolean = {
+  def execTestInProcess(classesDir: File, log: File): Boolean = suiteRunner.synchronized {
     def run(): Unit = {
       val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
       val cls = loader.loadClass("Test")
