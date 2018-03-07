@@ -264,9 +264,9 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
           val out = Files.newOutputStream(log.toPath, StandardOpenOption.APPEND)
           try {
             val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
-            val cls = loader.loadClass("Test")
-            val main = cls.getDeclaredMethod("main", classOf[Array[String]])
             StreamCapture.capturingOutErr(out) {
+              val cls = loader.loadClass("Test")
+              val main = cls.getDeclaredMethod("main", classOf[Array[String]])
               try {
                 main.invoke(null, Array[String]("jvm"))
               } catch {
@@ -279,8 +279,8 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
         } catch {
           case t: ControlThrowable => throw t
           case t: Throwable =>
+            // We'll let the checkfile diffing report this failure
             Files.write(log.toPath, stackTraceString(t).getBytes(Charset.defaultCharset()), StandardOpenOption.APPEND)
-            false
         }
       }
     }
@@ -294,7 +294,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
         //        error.setStackTrace(throwable.getStackTrace)
         setLastState(genFail("non-zero exit code"))
         false
-      case _ =>
+      case Right(succeeded) =>
         setLastState(genPass())
         true
     }
@@ -727,7 +727,8 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     val argsFile  = testFile changeExtension "javaopts"
     val javaopts = readOptionsFile(argsFile)
     val execInProcess = PartestDefaults.execInProcess && javaopts.isEmpty
-    runTestCommon(if (execInProcess) execTestInProcess(outDir, logFile) else execTest(outDir, logFile) && diffIsOk)
+    def exec() = if (execInProcess) execTestInProcess(outDir, logFile) else execTest(outDir, logFile)
+    runTestCommon(exec() && diffIsOk)
   }
 
   private def decompileClass(clazz: Class[_], isPackageObject: Boolean): String = {
