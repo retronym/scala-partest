@@ -50,6 +50,7 @@ class DirectCompiler(val runner: Runner) {
       case null => create()
       case cached =>
         // experimental mode of partest to reuse the symbol table for subsequent compilations
+        val previousOutputDir = cached.settings.outputDirs.getSingleOutput.get
         cached.settings.outputDirs.setSingleOutput(newOutputDir)
         cached.settings.classpath.value = settings.classpath.value
         val plat = cached.platform
@@ -59,7 +60,8 @@ class DirectCompiler(val runner: Runner) {
           plat.getClass.getMethod("currentClassPath_$eq", classOf[Option[_]]).invoke(plat, None)
           cached.reporter = reporter
           try {
-            resetSymbolTable(cached, newOutputDir.file)
+            cached.invalidateClassPathEntries(previousOutputDir.file.getAbsolutePath)
+//            resetSymbolTable(cached, newOutputDir.file)
             cached
           } catch {
             case _: DiscardGlobal =>
@@ -76,77 +78,79 @@ class DirectCompiler(val runner: Runner) {
     newGlobal(settings, new ExtConsoleReporter(settings, new PrintWriter(logWriter)))
 
   private class DiscardGlobal extends ControlThrowable
-  private def resetSymbolTable(g: Global, outputDir: File): Unit = {
-    import g._
-    def walkTopLevels(root: Symbol): Unit = {
-      def safeInfo(sym: Symbol): Type =
-        if (sym.hasRawInfo && sym.rawInfo.isComplete) sym.info else NoType
-      def packageClassOrSelf(sym: Symbol): Symbol =
-        if (sym.hasPackageFlag && !sym.isModuleClass) sym.moduleClass else sym
-
-      val reset = collection.mutable.Set[Symbol]()
-      for (x <- safeInfo(packageClassOrSelf(root)).decls) {
-        if (x == root) ()
-        else if (x.hasPackageFlag && x != rootMirror.EmptyPackage) {
-          x.moduleClass.rawInfo match {
-            case l: loaders.PackageLoader =>
-              x.moduleClass.setInfo(new loaders.PackageLoader(x.fullNameString, g.classPath))
-              x.setInfo(x.moduleClass.tpe)
-            case _ =>
-              walkTopLevels(x)
-          }
-        } else if (x.owner != root) { // exclude package class members
-          var sym = x.enclosingTopLevelClass
-          if (x.isModule) sym = x.moduleClass
-          if (sym.isModuleClass) sym = sym.companionClass.orElse(sym)
-          if (sym.hasRawInfo) {
-            val assocFile = if (sym.rawInfo.isComplete)
-              sym.associatedFile
-            else sym.rawInfo match {
-              case l: loaders.ClassfileLoader =>
-                l.classfile
-              case _ =>
-                NoAbstractFile
-            }
-            if (assocFile != NoAbstractFile) {
-              val fromJar = assocFile.path.endsWith(".class") && assocFile.underlyingSource.isDefined
-              if (!fromJar) {
-                if (sym.hasTransOwner(definitions.ScalaPackageClass)) throw new DiscardGlobal
-                sym.owner.ownerChain.takeWhile(!_.isEffectiveRoot).foreach { owner =>
-                  if (!reset.contains(owner)) {
-                    //                  println("reset: " + owner)
-                    owner.setInfo(new loaders.PackageLoader(owner.fullNameString, classPath))
-                    owner.sourceModule.setInfo(owner.tpe)
-                    reset += owner
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    exitingTyper {
-      import rootMirror._
-      EmptyPackageClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
-      EmptyPackage setInfo EmptyPackageClass.tpe
-      walkTopLevels(RootClass)
-      val oldRootDecls = RootClass.info.decls
-      RootClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
-      RootClass setInfo RootPackage.tpe
-      val newRootDecls = RootClass.info.decls
-      newRootDecls.toList.foreach { oldPack =>
-        if (oldRootDecls.containsName(oldPack.name)) {
-          newRootDecls.lookup(oldPack.name) match {
-            case NoSymbol =>
-            case sym =>
-              newRootDecls.unlink(sym)
-              newRootDecls.enter(oldPack)
-          }
-        }
-      }
-    }
-  }
+//  private def resetSymbolTable(g: Global, outputDir: File): Unit = {
+//    import g._
+//    def walkTopLevels(root: Symbol): Unit = {
+//      def safeInfo(sym: Symbol): Type =
+//        if (sym.hasRawInfo && sym.rawInfo.isComplete) sym.info else NoType
+//      def packageClassOrSelf(sym: Symbol): Symbol =
+//        if (sym.hasPackageFlag && !sym.isModuleClass) sym.moduleClass else sym
+//
+//      val reset = collection.mutable.Set[Symbol]()
+//      for (x <- safeInfo(packageClassOrSelf(root)).decls) {
+//        if (x == root) ()
+//        else if (x.hasPackageFlag && x != rootMirror.EmptyPackage) {
+//          x.moduleClass.rawInfo match {
+//            case l: loaders.PackageLoader =>
+//              x.moduleClass.setInfo(new loaders.PackageLoader(x.fullNameString, g.classPath))
+//              x.setInfo(x.moduleClass.tpe)
+//            case _ =>
+//              walkTopLevels(x)
+//          }
+//        } else if (x.owner != root) { // exclude package class members
+//          var sym = x.enclosingTopLevelClass
+//          if (x.isModule) sym = x.moduleClass
+//          if (sym.isModuleClass) sym = sym.companionClass.orElse(sym)
+//          if (sym.hasRawInfo) {
+//            val assocFile = if (sym.rawInfo.isComplete)
+//              sym.associatedFile
+//            else sym.rawInfo match {
+//              case l: loaders.ClassfileLoader =>
+//                l.classfile
+//              case _ =>
+//                NoAbstractFile
+//            }
+//            if (assocFile != NoAbstractFile) {
+//              val fromJar = assocFile.path.endsWith(".class") && assocFile.underlyingSource.isDefined
+//              if (!fromJar) {
+//                if (sym.hasTransOwner(definitions.ScalaPackageClass)) throw new DiscardGlobal
+//                sym.owner.ownerChain.takeWhile(!_.isEffectiveRoot).foreach { owner =>
+//                  if (!reset.contains(owner)) {
+//                    //                  println("reset: " + owner)
+//                    owner.setInfo(new loaders.PackageLoader(owner.fullNameString, classPath))
+//                    owner.sourceModule.setInfo(owner.tpe)
+//                    reset += owner
+//                  }
+//                }
+//              }
+//            }
+//          }
+//        }
+//      }
+//    }
+//    exitingTyper {
+//      import rootMirror._
+//      EmptyPackageClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
+//      EmptyPackage setInfo EmptyPackageClass.tpe
+//      walkTopLevels(RootClass)
+//      val oldRootDecls = RootClass.tpe.decls
+//      RootClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
+//      RootClass.initialize
+//      RootPackage.setInfo(NullaryMethodType(RootClass.tpe))
+//      val newRootDecls = RootClass.tpe.decls
+//      newRootDecls.toList.foreach { oldPack =>
+//        if (oldRootDecls.containsName(oldPack.name)) {
+//          newRootDecls.lookup(oldPack.name) match {
+//            case NoSymbol =>
+//            case sym =>
+//              newRootDecls.unlink(sym)
+//              newRootDecls.enter(oldPack)
+//          }
+//        }
+//      }
+//      this.getClass
+//    }
+//  }
 
 
   /** Massage args to merge plugins and fix paths.
