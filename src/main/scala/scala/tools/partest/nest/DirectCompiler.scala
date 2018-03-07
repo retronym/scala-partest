@@ -45,9 +45,7 @@ class DirectCompiler(val runner: Runner) {
       g
     }
     val newOutputDir = settings.outputDirs.getSingleOutput.get
-    // TODO patch RootClass info to be able to reuse globals in this use case.
-    val classFilesFromPreviousCompileRoundsExists = settings.outputDirs.getSingleOutput.get.file.list().length > 0
-    if (!PartestDefaults.reuseGlobal || classFilesFromPreviousCompileRoundsExists) create()
+    if (!PartestDefaults.reuseGlobal) create()
     else DirectCompiler.globalCache.get() match {
       case null => create()
       case cached =>
@@ -133,7 +131,20 @@ class DirectCompiler(val runner: Runner) {
       EmptyPackageClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
       EmptyPackage setInfo EmptyPackageClass.tpe
       walkTopLevels(RootClass)
-      // TODO update RootClass info to patch in packages from the current test's classpath
+      val oldRootDecls = RootClass.info.decls
+      RootClass.setInfo(new loaders.PackageLoader(ClassPath.RootPackage, classPath))
+      RootClass setInfo RootPackage.tpe
+      val newRootDecls = RootClass.info.decls
+      newRootDecls.toList.foreach { oldPack =>
+        if (oldRootDecls.containsName(oldPack.name)) {
+          newRootDecls.lookup(oldPack.name) match {
+            case NoSymbol =>
+            case sym =>
+              newRootDecls.unlink(sym)
+              newRootDecls.enter(oldPack)
+          }
+        }
+      }
     }
   }
 
