@@ -58,6 +58,7 @@ trait TestInfo {
 
 /** Run a single test. Rubber meets road. */
 class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestUI) extends TestInfo {
+  private val stopwatch = new Stopwatch()
 
   import suiteRunner.{fileManager => fm, _}
   val fileManager = fm
@@ -257,46 +258,50 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     }
   }
 
-  def execTestInProcess(classesDir: File, log: File): Boolean = suiteRunner.synchronized {
-    def run(): Unit = {
-      StreamCapture.withExtraProperties(propertyOptions(fork = false).toMap) {
-        try {
-          val out = Files.newOutputStream(log.toPath, StandardOpenOption.APPEND)
+  def execTestInProcess(classesDir: File, log: File): Boolean = {
+    stopwatch.pause()
+    suiteRunner.synchronized {
+      stopwatch.start()
+      def run(): Unit = {
+        StreamCapture.withExtraProperties(propertyOptions(fork = false).toMap) {
           try {
-            val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
-            StreamCapture.capturingOutErr(out) {
-              val cls = loader.loadClass("Test")
-              val main = cls.getDeclaredMethod("main", classOf[Array[String]])
-              try {
-                main.invoke(null, Array[String]("jvm"))
-              } catch {
-                case ite: InvocationTargetException => throw ite.getCause
+            val out = Files.newOutputStream(log.toPath, StandardOpenOption.APPEND)
+            try {
+              val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
+              StreamCapture.capturingOutErr(out) {
+                val cls = loader.loadClass("Test")
+                val main = cls.getDeclaredMethod("main", classOf[Array[String]])
+                try {
+                  main.invoke(null, Array[String]("jvm"))
+                } catch {
+                  case ite: InvocationTargetException => throw ite.getCause
+                }
               }
+            }  finally {
+              out.close()
             }
-          }  finally {
-            out.close()
+          } catch {
+            case t: ControlThrowable => throw t
+            case t: Throwable =>
+              // We'll let the checkfile diffing report this failure
+              Files.write(log.toPath, stackTraceString(t).getBytes(Charset.defaultCharset()), StandardOpenOption.APPEND)
           }
-        } catch {
-          case t: ControlThrowable => throw t
-          case t: Throwable =>
-            // We'll let the checkfile diffing report this failure
-            Files.write(log.toPath, stackTraceString(t).getBytes(Charset.defaultCharset()), StandardOpenOption.APPEND)
         }
       }
-    }
 
-    pushTranscript(s"<in process execution of $testIdent> > ${logFile.getName}")
+      pushTranscript(s"<in process execution of $testIdent> > ${logFile.getName}")
 
-    TrapExit(() => run()) match {
-      case Left((status, throwable)) if status != 0 =>
-        //        Files.readAllLines(log.toPath).forEach(println(_))
-        //        val error = new AssertionError(s"System.exit(${status}) was called.")
-        //        error.setStackTrace(throwable.getStackTrace)
-        setLastState(genFail("non-zero exit code"))
-        false
-      case _ =>
-        setLastState(genPass())
-        true
+      TrapExit(() => run()) match {
+        case Left((status, throwable)) if status != 0 =>
+          //        Files.readAllLines(log.toPath).forEach(println(_))
+          //        val error = new AssertionError(s"System.exit(${status}) was called.")
+          //        error.setStackTrace(throwable.getStackTrace)
+          setLastState(genFail("non-zero exit code"))
+          false
+        case _ =>
+          setLastState(genPass())
+          true
+      }
     }
   }
 
@@ -706,9 +711,10 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
     (diffIsOk, LogContext(logFile, swr, wr))
   }
 
-  def run(): TestState = {
+  def run(): (TestState, Long) = {
     // javac runner, for one, would merely append to an existing log file, so just delete it before we start
     logFile.delete()
+    stopwatch.start()
 
     if (kind == "neg" || (kind endsWith "-neg")) runNegTest()
     else kind match {
@@ -720,7 +726,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
       case _              => runRunTest()
     }
 
-    lastState
+    (lastState, stopwatch.stop)
   }
 
   private def runRunTest(): Unit = {
@@ -842,6 +848,7 @@ class SuiteRunner(
   def runTest(testFile: File): TestState = {
     val start = System.nanoTime()
     val runner = new Runner(testFile, this, nestUI)
+    var stopwatchDuration: Option[Long] = None
 
     // when option "--failed" is provided execute test only if log
     // is present (which means it failed before)
@@ -850,16 +857,18 @@ class SuiteRunner(
         runner.genPass()
       else {
         val (state, durationMs) =
-          try timed(runner.run())
+          try runner.run()
           catch {
             case t: Throwable => throw new RuntimeException(s"Error running $testFile", t)
           }
+        stopwatchDuration = Some(durationMs)
         nestUI.reportTest(state, runner, durationMs)
         runner.cleanup()
         state
       }
     val end = System.nanoTime()
-    onFinishTest(testFile, state, TimeUnit.NANOSECONDS.toMillis(end - start))
+    val durationMs = stopwatchDuration.getOrElse(TimeUnit.NANOSECONDS.toMillis(end - start))
+    onFinishTest(testFile, state, durationMs)
   }
 
   def runTestsForFiles(kindFiles: Array[File], kind: String): Array[TestState] = {
