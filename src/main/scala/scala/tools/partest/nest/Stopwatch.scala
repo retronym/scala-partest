@@ -15,6 +15,6 @@ class Stopwatch {
 
   def stop(): Long = {
     pause()
-    elapsed / 1000
+    (1.0 * elapsed / 1000 / 1000).toLong
   }
 }
