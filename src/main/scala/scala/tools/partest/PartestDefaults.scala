@@ -18,9 +18,13 @@ object PartestDefaults {
   def numThreads  = math.max(1, prop("partest.threads") map (_.toInt) getOrElse runtime.availableProcessors)
   def execInProcess: Boolean = {
     val prop = java.lang.Boolean.getBoolean("partest.exec.in.process")
-    if (prop && numThreads > 1) println("Note: test execution will be non-parallel under -Dpartest.exec.in.process")
+    if (prop && numThreads > 1) warningMessage
     prop
   }
+  private lazy val warningMessage: Unit = {
+    println("Note: test execution will be non-parallel under -Dpartest.exec.in.process")
+  }
+
   def waitTime    = Duration(prop("partest.timeout") getOrElse "4 hours")
   def reuseGlobal = java.lang.Boolean.getBoolean("partest.global.reuse")
 

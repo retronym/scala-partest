@@ -7,6 +7,7 @@ package nest
 
 import java.io.{Console => _, _}
 import java.lang.reflect.InvocationTargetException
+import java.nio.charset.Charset
 import java.nio.file.{Files, StandardOpenOption}
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -16,16 +17,17 @@ import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.Duration
 import scala.reflect.internal.FatalError
 import scala.reflect.internal.util.ScalaClassLoader
-import scala.sys.process.{ Process, ProcessLogger }
-import scala.tools.nsc.Properties.{ envOrNone, isWin, javaHome, javaVmInfo, javaVmName, javaVmVersion, propOrEmpty, versionMsg }
-import scala.tools.nsc.{ CompilerCommand, Global, Settings }
+import scala.sys.process.{Process, ProcessLogger}
+import scala.tools.nsc.Properties.{envOrNone, isWin, javaHome, javaVmInfo, javaVmName, javaVmVersion, propOrEmpty, versionMsg}
+import scala.tools.nsc.{CompilerCommand, Global, Settings}
 import scala.tools.nsc.reporters.ConsoleReporter
 import scala.tools.nsc.util.stackTraceString
-import scala.util.{ Failure, Success, Try }
+import scala.util.{Failure, Success, Try}
 import ClassPath.join
-import TestState.{ Crash, Fail, Pass, Uninitialized, Updated }
-import FileManager.{ compareContents, joinPaths, withTempFile }
+import TestState.{Crash, Fail, Pass, Uninitialized, Updated}
+import FileManager.{compareContents, joinPaths, withTempFile}
 import scala.reflect.internal.util.ScalaClassLoader.URLClassLoader
+import scala.util.control.ControlThrowable
 
 trait TestInfo {
   /** pos/t1234 */
@@ -257,21 +259,28 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
 
   def execTestInProcess(classesDir: File, log: File): Boolean = suiteRunner.synchronized {
     def run(): Unit = {
-      val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
-      val cls = loader.loadClass("Test")
-      val main = cls.getDeclaredMethod("main", classOf[Array[String]])
       StreamCapture.withExtraProperties(propertyOptions(fork = false).toMap) {
-        val out = Files.newOutputStream(log.toPath, StandardOpenOption.APPEND)
         try {
-          StreamCapture.capturingOutErr(out) {
-            try {
-              main.invoke(null, Array[String]("jvm"))
-            } catch {
-              case ite: InvocationTargetException => throw ite.getCause
+          val out = Files.newOutputStream(log.toPath, StandardOpenOption.APPEND)
+          try {
+            val loader = new URLClassLoader(classesDir.toURI.toURL :: Nil, getClass.getClassLoader)
+            val cls = loader.loadClass("Test")
+            val main = cls.getDeclaredMethod("main", classOf[Array[String]])
+            StreamCapture.capturingOutErr(out) {
+              try {
+                main.invoke(null, Array[String]("jvm"))
+              } catch {
+                case ite: InvocationTargetException => throw ite.getCause
+              }
             }
+          }  finally {
+            out.close()
           }
-        } finally {
-          out.close()
+        } catch {
+          case t: ControlThrowable => throw t
+          case t: Throwable =>
+            Files.write(log.toPath, stackTraceString(t).getBytes(Charset.defaultCharset()), StandardOpenOption.APPEND)
+            false
         }
       }
     }
@@ -280,15 +289,15 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
 
     TrapExit(() => run()) match {
       case Left((status, throwable)) if status != 0 =>
-//        Files.readAllLines(log.toPath).forEach(println(_))
-//        val error = new AssertionError(s"System.exit(${status}) was called.")
-//        error.setStackTrace(throwable.getStackTrace)
+        //        Files.readAllLines(log.toPath).forEach(println(_))
+        //        val error = new AssertionError(s"System.exit(${status}) was called.")
+        //        error.setStackTrace(throwable.getStackTrace)
         setLastState(genFail("non-zero exit code"))
         false
       case _ =>
         setLastState(genPass())
         true
-      }
+    }
   }
 
   override def toString = s"""Test($testIdent, lastState = $lastState)"""
