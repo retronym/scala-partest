@@ -53,13 +53,15 @@ object StreamCapture {
   }
 
   def withExtraProperties[A](extra: Map[String, String])(action: => A): A = {
-    val savedProps = new java.util.Properties()
-    System.getProperties().stringPropertyNames.forEach((k) => savedProps.setProperty(k, System.getProperty(k)))
-    extra.foreach { case (k, v) => System.setProperty(k, v) }
+    val saved = System.getProperties()
+    val modified = new java.util.Properties()
+    saved.stringPropertyNames().forEach((k) => modified.setProperty(k, saved.getProperty(k)))
+    extra.foreach { case (k, v) => modified.setProperty(k, v) }
+    System.setProperties(modified)
     try {
       action
     } finally {
-      System.setProperties(savedProps)
+      System.setProperties(saved)
     }
   }
 
