@@ -726,7 +726,7 @@ class Runner(val testFile: File, val suiteRunner: SuiteRunner, val nestUI: NestU
   private def runRunTest(): Unit = {
     val argsFile  = testFile changeExtension "javaopts"
     val javaopts = readOptionsFile(argsFile)
-    val execInProcess = PartestDefaults.execInProcess && javaopts.isEmpty
+    val execInProcess = PartestDefaults.execInProcess && javaopts.isEmpty && !Set("specialized", "instrumented").contains(testFile.getParentFile.getName)
     def exec() = if (execInProcess) execTestInProcess(outDir, logFile) else execTest(outDir, logFile)
     runTestCommon(exec() && diffIsOk)
   }
